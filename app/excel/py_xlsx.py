@@ -49,7 +49,7 @@ def create_bank_excel_report(results: List[Dict[str, Any]], output_dir: str = ".
     df = pd.DataFrame(data_rows, columns=["Параметр"] + banks_order)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"bank_cards_comparison_{timestamp}.xlsx"
+    filename = f"ТГ_Бенчмаркинг_{timestamp}.xlsx"
     filepath = Path(output_dir) / filename
     filepath.parent.mkdir(parents=True, exist_ok=True)
     

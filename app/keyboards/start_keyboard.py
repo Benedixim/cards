@@ -4,10 +4,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
 
-ITEMS = ["Сбер", "Альфа Банк", "Беларусбанк", "МТБанк", "Приорбанк", "БНБ", "ВТБ", "Белгазпромбанк", "Белагропромбанк", "БелВэб", "Дабрабыт"]
+ITEMS = ["Альфа Банк", "Беларусбанк", "МТБанк", "Приорбанк", "БНБ", "ВТБ", "Белгазпромбанк", "Белагропромбанк", "БелВэб", "Дабрабыт"]
 
 def get_multi_keyboard(banks: list, selected: set) -> InlineKeyboardBuilder:
-    """Клавиатура выбора банков для парсинга"""
     builder = InlineKeyboardBuilder()
     
     for bank in banks:

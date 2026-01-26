@@ -250,7 +250,6 @@ HTML:
             
             print(f"\n🔍 {bank_name} RAW: {repr(raw_response[:150])}")
             
-            # 3️⃣ ПАРСИМ JSON С ОБРАБОТКОЙ ОШИБОК
             parsed_data = _parse_json_safely(raw_response)
             if not parsed_data:
                 print(f"!!! {bank_name}: Не удалось распарсить JSON")
@@ -378,7 +377,7 @@ def _parse_json_safely(raw_response: str) -> dict | None:
         
         # попытка исправить невалидный JSON
         try:
-            # delete перевод строк внутри строк
+            # удаление перевода строк внутри строк
             json_str = re.sub(r'\\n', ' ', json_str)
             json_str = re.sub(r'\n', ' ', json_str)
             return json.loads(json_str)
@@ -403,3 +402,10 @@ def _empty_schema(bank_name: str) -> dict:
         "additional": None,
         "bank": bank_name
     }
+
+
+@router.callback_query(F.data == "cancel_parse", BankState.waiting_selection)
+async def cancel_parse(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(selected_banks=[])
+    await show_bank_keyboard(callback, state)
+    await callback.answer()
