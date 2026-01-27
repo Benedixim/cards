@@ -1,4 +1,4 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton,InlineKeyboardButton, InlineKeyboardMarkup
 
 from aiogram.utils.keyboard import InlineKeyboardBuilder 
 
@@ -20,10 +20,28 @@ def get_multi_keyboard(banks: list, selected: set) -> InlineKeyboardBuilder:
     return builder
 
 
+def get_sets_keyboard():
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🏦 Стандарт", 
+                callback_data="set_standard"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="⭐ Премиум", 
+                callback_data="set_premium"
+            )
+        ]
+    ])
+    return keyboard
+
+
 def get_info_keyboard():
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📊 Получить информацию")]
+            [KeyboardButton(text="📊 Собрать информацию")]
         ],
         resize_keyboard=True,
         one_time_keyboard=False

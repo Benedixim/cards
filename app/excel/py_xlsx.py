@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from openpyxl.styles import Alignment
 from datetime import datetime
 
@@ -20,7 +20,18 @@ FIELD_NAMES = {
 
 FIELD_ORDER = list(FIELD_NAMES.keys())
 
-def create_bank_excel_report(results: List[Dict[str, Any]], output_dir: str = "./") -> str:
+def create_bank_excel_report(
+    results: List[Dict[str, Any]], 
+    output_dir: str = "./",
+    selected_characteristics: Optional[List[str]] = None
+) -> str:
+
+    # Если характеристики не указаны, используем все
+    if not selected_characteristics:
+        field_order = FIELD_ORDER
+    else:
+        # Используем только выбранные, в порядке FIELD_ORDER
+        field_order = [f for f in FIELD_ORDER if f in selected_characteristics]
 
     banks_order = ["Сбер"]
     bank_data = {}
@@ -35,10 +46,11 @@ def create_bank_excel_report(results: List[Dict[str, Any]], output_dir: str = ".
 
     num_banks = len(banks_order)
     print(f"Создаем таблицу для {num_banks} банков: {banks_order}")
+    print(f"Характеристики: {field_order}")
     
 
     data_rows = []
-    for field in FIELD_ORDER:
+    for field in field_order:
         row = [FIELD_NAMES[field]]  
         for bank in banks_order:
             bank_info = bank_data.get(bank, {})
