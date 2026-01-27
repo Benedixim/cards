@@ -42,13 +42,13 @@ FIELD_NAMES = {
 
 @router.message(Command("start"))
 async def start_handler(message: Message, state: FSMContext):
-    get_info_keyboard()
     await message.answer(
         "👋 Добро пожаловать!\n\n"
         "Выберите **набор карт**:",
         parse_mode="Markdown",
-        reply_markup=get_sets_keyboard() and get_info_keyboard()
+        reply_markup=get_sets_keyboard()
     )
+    await message.answer('добавлена кнопка "📊 Собрать информацию"', reply_markup=get_info_keyboard())
 
 
 @router.message(Command("actv"))
