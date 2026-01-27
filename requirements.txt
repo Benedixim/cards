@@ -31,9 +31,11 @@ multidict==6.7.0
 numpy==2.4.1
 openpyxl==3.1.5
 pandas==3.0.0
+playwright==1.57.0
 propcache==0.4.1
 pydantic==2.12.5
 pydantic_core==2.41.5
+pyee==13.0.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
 requests==2.32.5
