@@ -111,7 +111,7 @@ async def start_handler(message: Message, state: FSMContext):
         parse_mode="Markdown",
         reply_markup=get_sets_keyboard()
     )
-    await message.answer('кнопка "📊 Собрать информацию" добавлена')
+    await message.answer('кнопка "📊 Собрать информацию" добавлена', reply_markup=get_info_keyboard())
 
 
 @router.message(Command("actv"))
