@@ -129,6 +129,16 @@ async def click_button_start(message: Message, state: FSMContext):
         reply_markup=get_sets_keyboard())
 
 
+@router.message(Command('db'))
+async def dump_data_base(message: Message):
+    db_file_path = "credits.db"  
+    
+    try:
+        document = FSInputFile(db_file_path)
+        await message.answer_document(document, caption="Вот ваша база данных")
+    except Exception as e:
+        await message.answer(f"Ошибка при отправке файла: {e}")
+
 async def show_products_keyboard(callback: CallbackQuery, state: FSMContext, set_id: int):
     """Отображение продуктов с мультивыбором"""
     data = await state.get_data()
