@@ -11,7 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 
 from config import TOKEN, PROXY_RU
-from app.handlers.card import router
+from app.handlers.card_custom import custom
 
 logging.basicConfig(level=logging.INFO)
 
@@ -82,7 +82,7 @@ async def main():
     )
 
     dp = Dispatcher()
-    dp.include_router(router)
+    dp.include_router(custom)
 
     app = web.Application()
     app["bot"] = bot
