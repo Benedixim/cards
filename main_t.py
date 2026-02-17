@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
 from config import TOKEN
-from app.handlers.card import router
+from app.handlers.card_custom import custom
 
 logging.basicConfig(level=logging.INFO)
 
@@ -17,7 +17,7 @@ dp = Dispatcher()
 
 async def main() -> None:
     bot = Bot(token = TOKEN, default = DefaultBotProperties(parse_mode = ParseMode.HTML))
-    dp.include_router(router)
+    dp.include_router(custom)
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
