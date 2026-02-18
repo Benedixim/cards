@@ -14,3 +14,7 @@ class BankState(StatesGroup):
     waiting_product_edit = State()
     waiting_char_name = State()
     editing_char_desc = State()
+    waiting_char_desc_edit = State()
+    waiting_char_hint_edit = State()
+    waiting_char_desc_edit_for_set = State()  
+    waiting_char_hint_edit_for_set = State() 

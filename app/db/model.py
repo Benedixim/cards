@@ -149,13 +149,13 @@ def migrate_products():
     for set_name, prods in products_data.items():
         set_obj = db.query(Set).filter_by(name=set_name).first()
         if not set_obj:
-            print(f"❌ Набор '{set_name}' не найден в БД")
+            print(f"Набор '{set_name}' не найден в БД")
             continue
             
         for bank_name, prod_name, prod_url in prods:
             bank_id = banks_map.get(bank_name)
             if not bank_id:
-                print(f"⚠️ Банк '{bank_name}' не найден в БД")
+                print(f"Банк '{bank_name}' не найден в БД")
                 continue
             
             # Проверяем, нет ли уже такого продукта
@@ -176,7 +176,7 @@ def migrate_products():
                 added += 1
                 print(f"✅ Добавлен продукт: {set_name} -> {bank_name}: {prod_name}")
             else:
-                print(f"⏭️ Продукт уже существует: {set_name} -> {bank_name}: {prod_name}")
+                print(f"Продукт уже существует: {set_name} -> {bank_name}: {prod_name}")
     
     db.commit()
     print(f"\n✅ Всего добавлено {added} продуктов")
@@ -218,10 +218,10 @@ def migrate_banks():
         if name not in existing_names:
             bank = Bank(name=name, url=url, parser_type=parser_type)
             db.add(bank)
-            print(f"✅ Добавлен банк: {name}")
+            print(f" Добавлен банк: {name}")
 
     db.commit()
-    print("🏦 Банки внесены в базу.")
+    print(" Банки внесены в базу.")
 
     # 3. Теперь уже можем создать наборы
     all_banks = [b.name for b in db.query(Bank).all()]
@@ -242,21 +242,20 @@ def migrate_banks():
             )
             db.add(set_obj)
             added_sets += 1
-            print(f"✅ Добавлен набор: {name}")
+            print(f" Добавлен набор: {name}")
 
     db.commit()
-    print(f"✅ Добавлено {added_sets} наборов")
+    print(f"Добавлено {added_sets} наборов")
     db.close()
 
 
 def recreate_data_table():
-    """✅ ПЕРЕСОЗДАЁТ таблицу data с правильной схемой"""
     from sqlalchemy import text
     
     db = SessionLocal()
     try:
         # 1. Сохраняем данные (если есть)
-        print("💾 Сохраняем существующие данные...")
+        print("Сохраняем существующие данные...")
         existing_data = db.execute(text("""
             SELECT user_id, created_at, product_id, characteristic_id, card_set, 
                    COALESCE(value, characteristics) as value, payload
@@ -266,11 +265,11 @@ def recreate_data_table():
         # 2. Удаляем старую таблицу
         db.execute(text("DROP TABLE IF EXISTS data"))
         db.commit()
-        print("🗑️ Старая таблица data удалена")
+        print("Старая таблица data удалена")
         
         # 3. Пересоздаём модели
         Base.metadata.create_all(bind=engine)
-        print("🔄 Новая таблица data создана")
+        print("Новая таблица data создана")
         
         # 4. Восстанавливаем данные
         if existing_data:
@@ -285,16 +284,16 @@ def recreate_data_table():
                 )
                 db.add(data_record)
             db.commit()
-            print(f"✅ Восстановлено {len(existing_data)} записей")
+            print(f"Восстановлено {len(existing_data)} записей")
         else:
-            print("ℹ️ Нет данных для восстановления")
+            print("Нет данных для восстановления")
             
     except Exception as e:
-        print(f"❌ Ошибка пересоздания: {e}")
+        print(f"Ошибка пересоздания: {e}")
         db.rollback()
     finally:
         db.close()
-        print("✅ ГОТОВО! Теперь парсинг будет работать")
+        print("ГОТОВО! Теперь парсинг будет работать")
 
 
 def migrate_base_characteristics():
@@ -355,7 +354,7 @@ def migrate_logs_add_tokens_column():
         columns = [row[1] for row in result.fetchall()]
         
         if "tokens_used" not in columns:
-            print("🔧 Добавляю колонку tokens_used в таблицу logs...")
+            print("Добавляю колонку tokens_used в таблицу logs...")
             
             db.execute(text("ALTER TABLE logs ADD COLUMN tokens_used INTEGER DEFAULT 0"))
             db.commit()

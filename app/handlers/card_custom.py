@@ -104,8 +104,20 @@ async def start_multi(message: Message, state: FSMContext):
 @custom.message(F.text == "📊 Собрать информацию")
 async def click_button_start(message: Message, state: FSMContext):
     db = SessionLocal()
-    sets = db.query(Set).all()
-    db.close()
+    try:
+        tg_id = message.from_user.id
+        user = db.query(User).filter(User.tg_id == tg_id).first()
+        
+        if not user:
+            user = User(tg_id=tg_id)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        
+        sets = get_sets_for_user(db, user.id)
+    finally:
+        db.close()
+    
     await message.answer( 
         "Выберите **набор карт**:",
         parse_mode="Markdown",
@@ -144,6 +156,9 @@ async def handle_new_char_for_set(message: Message, state: FSMContext):
     data = await state.get_data()
     set_id = data["editing_set_id"]
 
+    # Показываем статус
+    status_msg = await message.answer("⏳ Генерирую описание...")
+
     prompt = f"""
 Сформулируй краткое понятное описание для характеристики финансового продукта с названием: "{name}".
 Также добавь маленький текст‑подсказку о типе значения этой характеристики (например: "в BYN", "% годовых", "без ограничений" и т.п.).
@@ -154,17 +169,28 @@ async def handle_new_char_for_set(message: Message, state: FSMContext):
   "value_hint": "Подсказка к формату значения"
 }}
 """
-    giga = GigaChat(
-        credentials=GIGACHAT_TOKEN,
-        scope="GIGACHAT_API_B2B",
-        verify_ssl_certs=False,
-        model="GigaChat-2-Max",
-    )
-    result = giga.chat(prompt)
-    parsed = _parse_json_safely(result.choices[0].message.content)
+    
+    try:
+        giga = GigaChat(
+            credentials=GIGACHAT_TOKEN,
+            scope="GIGACHAT_API_B2B",
+            verify_ssl_certs=False,
+            model="GigaChat-2-Max",
+        )
+        result = giga.chat(prompt)
+        parsed = _parse_json_safely(result.choices[0].message.content)
 
-    desc = parsed.get("description", "Описание характеристики") if parsed else "Описание характеристики"
-    hint = parsed.get("value_hint", "Формат значения") if parsed else "Формат значения"
+        desc = parsed.get("description", "Описание характеристики") if parsed else "Описание характеристики"
+        hint = parsed.get("value_hint", "Формат значения") if parsed else "Формат значения"
+    except:
+        desc = "Описание характеристики"
+        hint = "Формат значения"
+    
+    # Удаляем статус
+    try:
+        await status_msg.delete()
+    except:
+        pass
 
     await state.update_data(
         temp_char_name=name,
@@ -175,15 +201,22 @@ async def handle_new_char_for_set(message: Message, state: FSMContext):
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="✅ Добавить в набор",
-                    callback_data="confirm_char_for_set",
-                )],
-                [InlineKeyboardButton(
-                    text="❌ Не добавлять",
-                    callback_data="no_confirm_char_for_set",
-                )]
-
+            [InlineKeyboardButton(
+                text="✅ Добавить в набор",
+                callback_data="confirm_char_for_set",
+            )],
+            [InlineKeyboardButton(
+                text="✏️ Изменить описание",
+                callback_data="edit_char_for_set_desc",
+            )],
+            [InlineKeyboardButton(
+                text="✏️ Изменить подсказку",
+                callback_data="edit_char_for_set_hint",
+            )],
+            [InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data="no_confirm_char_for_set",
+            )]
         ]
     )
 
@@ -191,7 +224,111 @@ async def handle_new_char_for_set(message: Message, state: FSMContext):
         f"🔑 Характеристика: *{name}*\n\n"
         f"📝 Описание:\n{desc}\n"
         f"💡 Тип значения: {hint}\n\n"
-        "Добавить в набор?",
+        "Вы можете отредактировать описание и подсказку перед добавлением.",
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
+
+
+@custom.callback_query(F.data == "edit_char_for_set_desc", BankState.editing_char_for_set)
+async def edit_char_for_set_desc(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BankState.waiting_char_desc_edit_for_set)
+    await callback.message.edit_text("✏️ Введите новое описание характеристики:")
+    await callback.answer()
+
+
+@custom.message(BankState.waiting_char_desc_edit_for_set)
+async def process_char_for_set_desc_edit(message: Message, state: FSMContext):
+    new_desc = message.text.strip()
+    if not new_desc:
+        await message.answer("Описание не должно быть пустым!")
+        return
+
+    await state.update_data(temp_char_description=new_desc)
+    await state.set_state(BankState.editing_char_for_set)
+    
+    data = await state.get_data()
+    name = data.get("temp_char_name", "")
+    hint = data.get("temp_char_hint", "")
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✅ Добавить в набор",
+                callback_data="confirm_char_for_set",
+            )],
+            [InlineKeyboardButton(
+                text="✏️ Изменить описание",
+                callback_data="edit_char_for_set_desc",
+            )],
+            [InlineKeyboardButton(
+                text="✏️ Изменить подсказку",
+                callback_data="edit_char_for_set_hint",
+            )],
+            [InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data="no_confirm_char_for_set",
+            )]
+        ]
+    )
+
+    await message.answer(
+        f"🔑 Характеристика: *{name}*\n\n"
+        f"📝 Описание:\n{new_desc}\n"
+        f"💡 Тип значения: {hint}\n\n"
+        "Готово! Подтвердите или отредактируйте дальше.",
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
+
+
+@custom.callback_query(F.data == "edit_char_for_set_hint", BankState.editing_char_for_set)
+async def edit_char_for_set_hint(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BankState.waiting_char_hint_edit_for_set)
+    await callback.message.edit_text("💡 Введите подсказку к формату значения (например: 'в BYN', '% годовых'):")
+    await callback.answer()
+
+
+@custom.message(BankState.waiting_char_hint_edit_for_set)
+async def process_char_for_set_hint_edit(message: Message, state: FSMContext):
+    new_hint = message.text.strip()
+    if not new_hint:
+        await message.answer("Подсказка не должна быть пустой!")
+        return
+
+    await state.update_data(temp_char_hint=new_hint)
+    await state.set_state(BankState.editing_char_for_set)
+    
+    data = await state.get_data()
+    name = data.get("temp_char_name", "")
+    desc = data.get("temp_char_description", "")
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✅ Добавить в набор",
+                callback_data="confirm_char_for_set",
+            )],
+            [InlineKeyboardButton(
+                text="✏️ Изменить описание",
+                callback_data="edit_char_for_set_desc",
+            )],
+            [InlineKeyboardButton(
+                text="✏️ Изменить подсказку",
+                callback_data="edit_char_for_set_hint",
+            )],
+            [InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data="no_confirm_char_for_set",
+            )]
+        ]
+    )
+
+    await message.answer(
+        f"🔑 Характеристика: *{name}*\n\n"
+        f"📝 Описание:\n{desc}\n"
+        f"💡 Тип значения: {new_hint}\n\n"
+        "Все готово! Подтвердите добавление.",
         parse_mode="Markdown",
         reply_markup=kb,
     )
@@ -405,10 +542,14 @@ async def back_to_main_menu(callback: CallbackQuery, state: FSMContext):
     try:
         tg_id = callback.from_user.id
         user = db.query(User).filter(User.tg_id == tg_id).first()
-        if user:
-            sets = get_sets_for_user(db, user.id)
-        else:
-            sets = get_sets_for_user(db, None)
+        
+        if not user:
+            user = User(tg_id=tg_id)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        
+        sets = get_sets_for_user(db, user.id)
     finally:
         db.close()
 
@@ -423,7 +564,16 @@ async def back_to_main_menu(callback: CallbackQuery, state: FSMContext):
 async def go_to_sets(callback: CallbackQuery, state: FSMContext):
     db = SessionLocal()
     try:
-        sets = db.query(Set).all()
+        tg_id = callback.from_user.id
+        user = db.query(User).filter(User.tg_id == tg_id).first()
+        
+        if not user:
+            user = User(tg_id=tg_id)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        
+        sets = get_sets_for_user(db, user.id)
     finally:
         db.close()
 
@@ -777,10 +927,14 @@ async def back_to_set(callback: CallbackQuery, state: FSMContext):
     try:
         tg_id = callback.from_user.id
         user = db.query(User).filter(User.tg_id == tg_id).first()
-        if user:
-            sets = get_sets_for_user(db, user.id)
-        else:
-            sets = get_sets_for_user(db, None)
+        
+        if not user:
+            user = User(tg_id=tg_id)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        
+        sets = get_sets_for_user(db, user.id)
     finally:
         db.close()
 
@@ -814,20 +968,44 @@ async def handle_product_url(message: Message, state: FSMContext):
     set_id = data["editing_set_id"]
     user_id = message.from_user.id
 
-    page_text = await extract_page_text(url)
-    if not page_text or len(page_text) < 100:
-        await message.answer("Не удалось загрузить страницу. Проверьте URL и попробуйте снова.")
-        await state.clear()
-        return
-
-    giga = GigaChat(
-        credentials=GIGACHAT_TOKEN,
-        scope="GIGACHAT_API_B2B",
-        verify_ssl_certs=False,
-        model="GigaChat-2-Max"
+    progress_msg = await message.answer(
+        "🔄 Загружаю страницу...\n"
+        "[░░░░░░░░░░] 10%"
     )
 
-    prompt = f"""
+    try:
+        await progress_msg.edit_text(
+            "🔄 Загружаю страницу...\n"
+            "[██░░░░░░░░] 20%"
+        )
+
+        page_text = await extract_page_text(url)
+        if not page_text or len(page_text) < 100:
+            await progress_msg.delete()
+            await message.answer(
+                "❌ Не удалось загрузить страницу.\n\n"
+                "Возможные причины:\n"
+                "• Неверный URL\n"
+                "• Сайт недоступен\n"
+                "• Сайт заблокирован\n\n"
+                "Проверьте URL и попробуйте снова."
+            )
+            await state.clear()
+            return
+
+        await progress_msg.edit_text(
+            "🤖 Анализирую содержимое...\n"
+            "[████░░░░░░] 40%"
+        )
+
+        giga = GigaChat(
+            credentials=GIGACHAT_TOKEN,
+            scope="GIGACHAT_API_B2B",
+            verify_ssl_certs=False,
+            model="GigaChat-2-Max"
+        )
+
+        prompt = f"""
 Проанализируй текст страницы и определи:
 
 1. название банка (кратко: просто "Сбер", "Альфа Банк", "Беларусбанк" и т.п.);
@@ -843,40 +1021,65 @@ async def handle_product_url(message: Message, state: FSMContext):
 {page_text}
 """
 
-    result = giga.chat(prompt)
-    raw = result.choices[0].message.content
+        result = giga.chat(prompt)
+        raw = result.choices[0].message.content
 
-    parsed = _parse_json_safely(raw)
-    if not parsed:
-        bank_guess = "Банк (уточните)"
-        product_guess = "Продукт (уточните)"
-    else:
-        bank_guess = parsed.get("bank", "Банк (уточните)")
-        product_guess = parsed.get("product", "Продукт (уточните)")
+        await progress_msg.edit_text(
+            "✅ Анализ завершен\n"
+            "[██████████] 100%"
+        )
 
-    await state.update_data(
-        temp_product_url=url,
-        temp_bank_guess=bank_guess,
-        temp_product_guess=product_guess,
-    )
-    await state.set_state(BankState.waiting_product_confirm)
+        parsed = _parse_json_safely(raw)
+        if not parsed:
+            bank_guess = "Банк (уточните)"
+            product_guess = "Продукт (уточните)"
+        else:
+            bank_guess = parsed.get("bank", "Банк (уточните)")
+            product_guess = parsed.get("product", "Продукт (уточните)")
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_product"),
-                InlineKeyboardButton(text="✏️ Редактировать", callback_data="edit_product_bank_product"),
+        # Удаляем прогресс сообщение
+        try:
+            await progress_msg.delete()
+        except:
+            pass
+
+        await state.update_data(
+            temp_product_url=url,
+            temp_bank_guess=bank_guess,
+            temp_product_guess=product_guess,
+        )
+        await state.set_state(BankState.waiting_product_confirm)
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_product"),
+                    InlineKeyboardButton(text="✏️ Редактировать", callback_data="edit_product_bank_product"),
+                ]
             ]
-        ]
-    )
-    await message.answer(
-        "LLM предположил:\n"
-        f"🏦 Банк: <b>{bank_guess}</b>\n"
-        f"💳 Продукт: <b>{product_guess}</b>\n\n"
-        "Проверьте и подтвердите или отредактируйте.",
-        parse_mode="HTML",
-        reply_markup=keyboard,
-    )
+        )
+        await message.answer(
+            "✅ Анализ завершен:\n\n"
+            f"🏦 Банк: <b>{bank_guess}</b>\n"
+            f"💳 Продукт: <b>{product_guess}</b>\n\n"
+            "Проверьте и подтвердите или отредактируйте.",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+
+    except Exception as e:
+        print(f"❌ Ошибка при обработке URL: {e}")
+        
+        try:
+            await progress_msg.delete()
+        except:
+            pass
+        
+        await message.answer(
+            "❌ Ошибка при обработке URL.\n\n"
+            "Попробуйте еще раз или проверьте URL."
+        )
+        await state.clear()
 
 
 
@@ -938,6 +1141,8 @@ async def handle_char_name(message: Message, state: FSMContext):
     finally:
         db.close()
 
+    status_msg = await message.answer("⏳ Генерирую описание...")
+
     prompt = f"""
 Сформулируй краткое понятное описание для характеристики финансового продукта с названием: "{name}".
 Также добавь маленький текст‑подсказку о типе значения этой характеристики (например: "в BYN", "% годовых", "без ограничений" и т.п.).
@@ -949,29 +1154,146 @@ async def handle_char_name(message: Message, state: FSMContext):
 }}
 """
 
-    giga = GigaChat(
-        credentials=GIGACHAT_TOKEN,
-        scope="GIGACHAT_API_B2B",
-        verify_ssl_certs=False,
-        model="GigaChat-2-Max"
+    try:
+        giga = GigaChat(
+            credentials=GIGACHAT_TOKEN,
+            scope="GIGACHAT_API_B2B",
+            verify_ssl_certs=False,
+            model="GigaChat-2-Max"
+        )
+
+        result = giga.chat(prompt)
+        raw = result.choices[0].message.content
+        parsed = _parse_json_safely(raw)
+
+        if not parsed:
+            desc = "Описание характеристики."
+            hint = "Заполните вручную (BYN, % и т.п.)"
+        else:
+            desc = parsed.get("description", "Описание характеристики.")
+            hint = parsed.get("value_hint", "Подсказка не сформирована")
+
+        await state.update_data(
+            temp_char_description=desc,
+            temp_char_hint=hint,
+        )
+        await state.set_state(BankState.editing_char_desc)
+
+        try:
+            await status_msg.delete()
+        except:
+            pass
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Добавить", callback_data="confirm_characteristic"),
+                    InlineKeyboardButton(text="✏️ Изменить описание", callback_data="edit_characteristic_desc"),
+                ]
+            ]
+        )
+
+        await message.answer(
+            f"🔑 Характеристика: <b>{name}</b>\n\n"
+            f"📝 Описание:\n<pre>{desc}</pre>\n"
+            f"💡 Тип значения: <code>{hint}</code>\n\n"
+            f"<b>Проверьте и подтвердите или отредактируйте описание и подсказку.</b>",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+
+    except Exception as e:
+        print(f"Ошибка при генерации описания: {e}")
+        await status_msg.delete()
+        
+        await state.update_data(
+            temp_char_description="Описание характеристики.",
+            temp_char_hint="Заполните вручную"
+        )
+        await state.set_state(BankState.editing_char_desc)
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Добавить", callback_data="confirm_characteristic"),
+                    InlineKeyboardButton(text="✏️ Изменить описание", callback_data="edit_characteristic_desc"),
+                ]
+            ]
+        )
+
+        await message.answer(
+            f"🔑 Характеристика: <b>{name}</b>\n\n"
+            f"⚠️ Не удалось автоматически сгенерировать описание.\n"
+            f"Пожалуйста, отредактируйте вручную.",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+
+
+@custom.callback_query(F.data == "edit_characteristic_desc", BankState.editing_char_desc)
+async def edit_characteristic_desc(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BankState.waiting_char_desc_edit)
+    await callback.message.edit_text(
+        "✏️ Введите новое описание характеристики:"
     )
+    await callback.answer()
 
-    result = giga.chat(prompt)
-    raw = result.choices[0].message.content
-    parsed = _parse_json_safely(raw)
 
-    if not parsed:
-        desc = "Описание характеристики."
-        hint = "Заполните вручную (BYN, % и т.п.)"
-    else:
-        desc = parsed.get("description", "Описание характеристики.")
-        hint = parsed.get("value_hint", "Подсказка не сформирована")
+@custom.message(BankState.waiting_char_desc_edit)
+async def process_char_desc_edit(message: Message, state: FSMContext):
+    new_desc = message.text.strip()
+    if not new_desc:
+        await message.answer("Описание не должно быть пустым!")
+        return
 
-    await state.update_data(
-        temp_char_description=desc,
-        temp_char_hint=hint,
-    )
+    await state.update_data(temp_char_description=new_desc)
     await state.set_state(BankState.editing_char_desc)
+    
+    data = await state.get_data()
+    name = data.get("temp_char_name", "")
+    hint = data.get("temp_char_hint", "")
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Добавить", callback_data="confirm_characteristic"),
+                InlineKeyboardButton(text="✏️ Изменить подсказку", callback_data="edit_characteristic_hint"),
+            ]
+        ]
+    )
+
+    await message.answer(
+        f"🔑 Характеристика: <b>{name}</b>\n\n"
+        f"📝 Описание:\n<pre>{new_desc}</pre>\n"
+        f"💡 Тип значения: <code>{hint}</code>\n\n"
+        f"<b>Подтвердите или отредактируйте дальше.</b>",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
+@custom.callback_query(F.data == "edit_characteristic_hint", BankState.editing_char_desc)
+async def edit_characteristic_hint(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BankState.waiting_char_hint_edit)
+    await callback.message.edit_text(
+        "💡 Введите подсказку к формату значения (например: 'в BYN', '% годовых'):"
+    )
+    await callback.answer()
+
+
+@custom.message(BankState.waiting_char_hint_edit)
+async def process_char_hint_edit(message: Message, state: FSMContext):
+    new_hint = message.text.strip()
+    if not new_hint:
+        await message.answer("Подсказка не должна быть пустой!")
+        return
+
+    await state.update_data(temp_char_hint=new_hint)
+    await state.set_state(BankState.editing_char_desc)
+    
+    data = await state.get_data()
+    name = data.get("temp_char_name", "")
+    desc = data.get("temp_char_description", "")
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -985,8 +1307,8 @@ async def handle_char_name(message: Message, state: FSMContext):
     await message.answer(
         f"🔑 Характеристика: <b>{name}</b>\n\n"
         f"📝 Описание:\n<pre>{desc}</pre>\n"
-        f"💡 Тип значения: <code>{hint}</code>\n\n"
-        "Проверьте и подтвердите или отредактируйте.",
+        f"💡 Тип значения: <code>{new_hint}</code>\n\n"
+        f"<b>Все готово! Подтвердите добавление.</b>",
         parse_mode="HTML",
         reply_markup=kb,
     )
@@ -1121,7 +1443,6 @@ async def confirm_selection(callback: CallbackQuery, state: FSMContext):
 
 @custom.callback_query(F.data == "back_to_characteristics")
 async def back_to_characteristics(callback: CallbackQuery, state: FSMContext):
-    """✅ Возврат к выбору характеристик с корректным обновлением"""
     data = await state.get_data()
     set_id = data.get("selected_set_id")
     selected_chars = set(data.get("selected_characteristics", []))
@@ -1257,7 +1578,6 @@ async def no_confirm_char_for_set(callback: CallbackQuery, state: FSMContext):
 
 @custom.callback_query(F.data == "start_parsing")
 async def start_parsing(callback: CallbackQuery, state: FSMContext):
-    """Запуск парсинга выбранных продуктов и характеристик"""
     data = await state.get_data()
     selected_products = data.get("selected_products", [])
     selected_chars = data.get("selected_characteristics", [])
@@ -1394,7 +1714,7 @@ async def parse_selected_data_with_response(
         excel_path = create_bank_excel_report(db, user_id, product_ids, char_ids)
         
         if excel_path:
-            print(f"✅ Excel готов: {excel_path}")
+            print(f"Excel готов: {excel_path}")
             
             try:
                 document = FSInputFile(excel_path)
@@ -1406,7 +1726,7 @@ async def parse_selected_data_with_response(
                             f"- {len(chars)} характеристик\n"
                             f"Файл готов к скачиванию!"
                 )
-                print(f"✅ Excel отправлен пользователю")
+                print(f"Excel отправлен пользователю")
                 
                 await bot.edit_message_text(
                     chat_id=chat_id,
