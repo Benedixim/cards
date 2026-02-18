@@ -125,7 +125,7 @@ def migrate_products():
     products_data = {
         "Стандарт": [
             ("Сбер", "SberCard", "https://www.sber-bank.by/card/sbercard"),
-            ("Альфа Банк", "Alfa Classic", "https://www.alfabank.by/besmart/alfa-classic/"),
+            ("Альфа Банк", "Alfa Classic", "https://www.alfabank.by/besmart/alfa-platinum/"),
             ("Беларусбанк", "Щедрая Mastercard", "https://belarusbank.by/fizicheskim_licam/cards/shchodraya-mastercard/"),
             ("МТБанк", "Cactus", "https://www.mtbank.by/cards/cactus/tarifs/"),
             ("Приорбанк", "Яркая карта", "https://www.priorbank.by/offers/cards/yarkaya-karta"),
@@ -134,14 +134,20 @@ def migrate_products():
             ("Белгазпромбанк", "Classic Card", "https://belgazprombank.by/personal_banking/plastikovie_karti/raschetnie_karti/classic-card/cashalot/"),
             ("Белагропромбанк", "Пакет Лайт", "https://www.belapb.by/chastnomu-klientu/bankovskie-karty/paket-layt/paket-layt/"),
             ("БелВэб", "Simple", "https://www.belveb.by/package/simple/"),
-            ("Дабрабыт", "Спра-ная", "https://bankdabrabyt.by/personal/cards/paket-uslug-spra-naya/?nocache=1769017617302"),
+            ("Дабрабыт", "Спраyная", "https://bankdabrabyt.by/personal/cards/paket-uslug-spra-naya/?nocache=1769017617302"),
         ],
         "Премиум": [
-            ("Сбер", "SberCard", "https://www.sber-bank.by/card/sbercard"),
-            ("Альфа Банк", "Alfa Classic", "https://www.alfabank.by/besmart/alfa-classic/"),
-            ("Беларусбанк", "Щедрая Mastercard", "https://belarusbank.by/fizicheskim_licam/cards/shchodraya-mastercard/"),
-            ("МТБанк", "Cactus", "https://www.mtbank.by/cards/cactus/tarifs/"),
-            ("Приорбанк", "Яркая карта", "https://www.priorbank.by/offers/cards/yarkaya-karta"),
+            ("Сбер", "СберКарта Ультра 2.0", "https://www.sber-bank.by/card/sbercard"),
+            ("Альфа Банк", "Alfa Platinum", "https://www.alfabank.by/besmart/alfa-classic/"),
+            ("Беларусбанк", "Platinum", "https://belarusbank.by/fizicheskim_licam/cards/platinum-unionpay/"),
+            ("МТБанк", "Prime-line", "https://www.mtbank.by/prime/prime-line/"),
+            ("Приорбанк", "Visa Signature", "https://www.priorbank.by/offers/cards/visa-signature"),
+            ("БНБ", "Masterсard World Elite", "https://bnb.by/o-lichnom/bankovskie-kartochki/mastercard-world-elite/"),
+            ("ВТБ", "Infinite", "https://www.vtb.by/chastnym-licam/bankovskie-kartochki/debetovye-kartochki/premialnaya-kartochka-infinite"),
+            ("Белгазпромбанк", "Visa Platinum", "https://belgazprombank.by/personal_banking/plastikovie_karti/raschetnie_karti/premial_nie_karti/premial_naja_karta_visa_platin/"),
+            ("Белагропромбанк", "Mastercard World Black Edition", "https://www.belapb.by/chastnomu-klientu/bankovskie-karty/mastercard/mastercard-world-black-edition/"),
+            ("БелВэб", "Всё по максимуму", "https://www.belveb.by/package/maximum/"),
+            ("Дабрабыт", "Разам. Для унікальнага", "https://bankdabrabyt.by/personal/razam/razam-dlya-unikalnaga/"),
         ]
     }
     

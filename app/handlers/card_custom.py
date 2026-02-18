@@ -92,12 +92,12 @@ async def start_handler(message: Message, state: FSMContext):
 
 @custom.message(Command("actv"))
 async def start_multi(message: Message, state: FSMContext):
-    init_db()
-    migrate_banks()
+    # init_db()
+    # migrate_banks()
     migrate_products()
-    migrate_base_characteristics()
-    recreate_data_table()
-    migrate_logs_add_tokens_column()
+    # migrate_base_characteristics()
+    # recreate_data_table()
+    # migrate_logs_add_tokens_column()
     print("✅ Полная миграция завершена!")
 
 
