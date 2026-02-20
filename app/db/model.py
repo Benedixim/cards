@@ -97,7 +97,8 @@ class Log(Base):
     action = Column(String(50))  
     status = Column(String(50)) 
     message = Column(Text)
-    tokens_used = Column(Integer, default=0) 
+    tokens_input = Column(Integer, default=0)   # токены на вход (prompt)
+    tokens_output = Column(Integer, default=0)  # токены на выход (completion)
 
 
 engine = create_engine("sqlite:///cards.db", echo=False, future=True)
@@ -346,30 +347,43 @@ def migrate_base_characteristics():
                     db.add(char)
         
         db.commit()
-        print(f"✅ Добавлены характеристики в {len(user_sets)} наборов")
+        print(f"Добавлены характеристики в {len(user_sets)} наборов")
     finally:
         db.close()
 
 
 def migrate_logs_add_tokens_column():
-    
+
     db = SessionLocal()
     
     try:
         result = db.execute(text("PRAGMA table_info(logs)"))
         columns = [row[1] for row in result.fetchall()]
         
-        if "tokens_used" not in columns:
-            print("Добавляю колонку tokens_used в таблицу logs...")
-            
-            db.execute(text("ALTER TABLE logs ADD COLUMN tokens_used INTEGER DEFAULT 0"))
+        changed = False
+
+        if "tokens_used" in columns:
+            print("Колонка tokens_used устарела. Новые данные пишутся в tokens_input/tokens_output.")
+
+        if "tokens_input" not in columns:
+            print("Добавляю колонку tokens_input в таблицу logs...")
+            db.execute(text("ALTER TABLE logs ADD COLUMN tokens_input INTEGER DEFAULT 0"))
             db.commit()
-            
-            print("✅ Колонка tokens_used успешно добавлена!")
-            return True
+            print("Колонка tokens_input добавлена!")
+            changed = True
         else:
-            print("✅ Колонка tokens_used уже существует")
-            return False
+            print("Колонка tokens_input уже существует")
+
+        if "tokens_output" not in columns:
+            print("Добавляю колонку tokens_output в таблицу logs...")
+            db.execute(text("ALTER TABLE logs ADD COLUMN tokens_output INTEGER DEFAULT 0"))
+            db.commit()
+            print("✅ Колонка tokens_output добавлена!")
+            changed = True
+        else:
+            print("✅ Колонка tokens_output уже существует")
+
+        return changed
             
     except Exception as e:
         print(f"Ошибка миграции: {e}")

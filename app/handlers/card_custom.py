@@ -127,13 +127,23 @@ async def click_button_start(message: Message, state: FSMContext):
 
 @custom.message(Command('db'))
 async def dump_data_base(message: Message):
-    db_file_path = "cards.db"  
-    
+    import shutil
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    src_path = "cards.db"
+    tmp_path = os.path.join(os.path.dirname(os.path.abspath(src_path)), f"cards_{timestamp}.db")
+
     try:
-        document = FSInputFile(db_file_path)
-        await message.answer_document(document, caption="Вот ваша база данных")
+        shutil.copy2(src_path, tmp_path)
+        document = FSInputFile(tmp_path, filename=f"cards_{timestamp}.db")
+        await message.answer_document(document, caption=f"🗄 База данных {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
     except Exception as e:
         await message.answer(f"Ошибка при отправке файла: {e}")
+    finally:
+        try:
+            os.remove(tmp_path)
+        except:
+            pass
 
 async def show_products_keyboard(callback: CallbackQuery, state: FSMContext, set_id: int):
     text, markup = await build_products_keyboard(state, set_id)
@@ -1612,7 +1622,8 @@ async def parse_selected_data_with_response(
         user_id=user_id,
         action="parse",
         status="process",
-        tokens_used=0,
+        tokens_input=0,
+        tokens_output=0,
         message=""
     )
     db.add(log)
@@ -1688,19 +1699,22 @@ async def parse_selected_data_with_response(
                 if len(cleaned_html) < 300:
                     print(f" -! HTML слишком мал, используем текстовый парсинг")
                     text_content = soup.get_text(separator=" ", strip=True)[:70000]
-                    tokens = await _parse_product_text(giga, product, chars, db, user_id, text_content)
-                    log.tokens_used += tokens
+                    tokens_in, tokens_out = await _parse_product_text(giga, product, chars, db, user_id, text_content)
+                    log.tokens_input += tokens_in
+                    log.tokens_output += tokens_out
                     continue
                 
 
-                tokens = await _parse_product_html(giga, product, chars, db, user_id, cleaned_html)
-                log.tokens_used += tokens
+                tokens_in, tokens_out = await _parse_product_html(giga, product, chars, db, user_id, cleaned_html)
+                log.tokens_input += tokens_in
+                log.tokens_output += tokens_out
                 
-                if tokens == 0:
+                if tokens_in == 0 and tokens_out == 0:
                     print(f"  >>> Пробуем текстовый парсинг...")
                     text_content = soup.get_text(separator=" ", strip=True)[:70000]
-                    tokens = await _parse_product_text(giga, product, chars, db, user_id, text_content)
-                    log.tokens_used += tokens
+                    tokens_in, tokens_out = await _parse_product_text(giga, product, chars, db, user_id, text_content)
+                    log.tokens_input += tokens_in
+                    log.tokens_output += tokens_out
                 
             except Exception as e:
                 print(f"  !!! Ошибка парсинга: {e}")
@@ -1736,7 +1750,7 @@ async def parse_selected_data_with_response(
                 )
                 
                 log.status = "ok"
-                log.message = f"Успешно: {len(products)} продуктов, {len(chars)} характеристик, {log.tokens_used} токенов"
+                log.message = f"Успешно: {len(products)} продуктов, {len(chars)} характеристик, вход: {log.tokens_input} / выход: {log.tokens_output} токенов"
                 db.commit()
                 
             except Exception as e:
@@ -1862,7 +1876,7 @@ async def add_product_to_current_set(callback: CallbackQuery, state: FSMContext)
     await callback.answer()
 
 
-async def _parse_product_html(giga: GigaChat, product, chars, db, user_id: int, cleaned_html: str) -> int:
+async def _parse_product_html(giga: GigaChat, product, chars, db, user_id: int, cleaned_html: str) -> tuple[int, int]:
 
     char_instructions = []
     for char in chars:
@@ -1892,23 +1906,21 @@ HTML:
         raw_response = result.choices[0].message.content
         
         usage = result.usage if hasattr(result, 'usage') else None
-        total_tokens = 0
+        tokens_input = 0
+        tokens_output = 0
         if usage:
-            if hasattr(usage, 'prompt_tokens') and hasattr(usage, 'completion_tokens'):
-                total_tokens = usage.prompt_tokens + usage.completion_tokens
-            elif hasattr(usage, 'total_tokens'):
-                total_tokens = usage.total_tokens
-        
+            tokens_input = getattr(usage, 'prompt_tokens', 0) or 0
+            tokens_output = getattr(usage, 'completion_tokens', 0) or 0
         
         parsed_data = _parse_json_safely(raw_response)
         if not parsed_data:
             print(f"  !!! JSON парсинг не удался")
-            return total_tokens
+            return tokens_input, tokens_output
         
         has_data = any(v for v in parsed_data.values() if v and v != "null" and v is not None)
         if not has_data:
             print(f"  -! Все поля null")
-            return total_tokens
+            return tokens_input, tokens_output
         
         # Сохраняем в БД
         for char in chars:
@@ -1926,14 +1938,14 @@ HTML:
             db.add(data_record)
         
         print(f"  ✅ Сохранено {len(chars)} характеристик")
-        return total_tokens
+        return tokens_input, tokens_output
         
     except Exception as e:
         print(f"  !!! Ошибка: {e}")
-        return 0
+        return 0, 0
 
 
-async def _parse_product_text(giga: GigaChat, product, chars, db, user_id: int, text_content: str) -> int:
+async def _parse_product_text(giga: GigaChat, product, chars, db, user_id: int, text_content: str) -> tuple[int, int]:
     
     char_instructions = []
     for char in chars:
@@ -1958,23 +1970,22 @@ async def _parse_product_text(giga: GigaChat, product, chars, db, user_id: int, 
         raw_response = result.choices[0].message.content
         
         usage = result.usage if hasattr(result, 'usage') else None
-        total_tokens = 0
+        tokens_input = 0
+        tokens_output = 0
         if usage:
-            if hasattr(usage, 'prompt_tokens') and hasattr(usage, 'completion_tokens'):
-                total_tokens = usage.prompt_tokens + usage.completion_tokens
-            elif hasattr(usage, 'total_tokens'):
-                total_tokens = usage.total_tokens
+            tokens_input = getattr(usage, 'prompt_tokens', 0) or 0
+            tokens_output = getattr(usage, 'completion_tokens', 0) or 0
         
         
         parsed_data = _parse_json_safely(raw_response)
         if not parsed_data:
             print(f"  !!! JSON парсинг не удался")
-            return total_tokens
+            return tokens_input, tokens_output
         
         has_data = any(v for v in parsed_data.values() if v and v != "null" and v is not None)
         if not has_data:
             print(f"  -! Все поля null")
-            return total_tokens
+            return tokens_input, tokens_output
         
         # Сохраняем в БД
         for char in chars:
@@ -1992,11 +2003,11 @@ async def _parse_product_text(giga: GigaChat, product, chars, db, user_id: int, 
             db.add(data_record)
         
         print(f"  ✅ Сохранено {len(chars)} характеристик (текстовый парсинг)")
-        return total_tokens
+        return prompt_tokens, completion_tokens
         
     except Exception as e:
         print(f"  !!! Ошибка: {e}")
-        return 0
+        return 0, 0
 
 
 def _parse_json_safely(raw_response: str) -> dict | None:

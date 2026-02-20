@@ -161,7 +161,7 @@ def create_bank_excel_report(
                     cell.fill = PatternFill(start_color="E7F0FF", end_color="E7F0FF", fill_type="solid")
             
 
-            data_start_row = 4  
+            data_start_row = 3  
             
             for row_idx, row in enumerate(worksheet.iter_rows(min_row=data_start_row), 1):
                 for col_idx, cell in enumerate(row):
