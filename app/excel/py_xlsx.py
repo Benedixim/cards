@@ -11,7 +11,7 @@ from app.db.model import Data, Product, Characteristic, Bank
 
 
 RUSSIAN_CHAR_NAMES = {
-    "type": "Тип карты",
+    "payment system": "Платежная система",
     "currency": "Валюта", 
     "validity": "Срок действия",
     "maintenance_cost": "Обслуживание",

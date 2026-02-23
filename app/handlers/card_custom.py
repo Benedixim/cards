@@ -27,7 +27,7 @@ from app.state import BankState
 from app.excel.py_xlsx import create_bank_excel_report
 from app.handlers.parser import get_page_content, extract_page_text
 from app.db.model import (SessionLocal, User, Log, Data, Bank, Set, Product, Characteristic,
-                           migrate_products, migrate_banks, init_db, get_sets_for_user, recreate_data_table, migrate_base_characteristics, migrate_logs_add_tokens_column)
+                           migrate_products, migrate_banks, init_db, get_sets_for_user, recreate_data_table, migrate_base_characteristics, migrate_logs_add_tokens_column, migrate_loyalty_characteristics)
 from config import GIGACHAT_TOKEN, SYSTEM_USER_ID
 
 custom = Router()
@@ -43,7 +43,7 @@ def get_bot(token: str) -> Bot:
 
 
 FIELD_NAMES = {
-    "type": "Тип карты",
+    "payment system": "Платежная система",
     "currency": "Валюта", 
     "validity": "Срок действия",
     "maintenance_cost": "Обслуживание",
@@ -93,11 +93,12 @@ async def start_handler(message: Message, state: FSMContext):
 @custom.message(Command("actv"))
 async def start_multi(message: Message, state: FSMContext):
     # init_db()
-    # migrate_banks()
+    migrate_banks()
     migrate_products()
+    migrate_loyalty_characteristics()
     # migrate_base_characteristics()
     # recreate_data_table()
-    # migrate_logs_add_tokens_column()
+    migrate_logs_add_tokens_column()
     print("✅ Полная миграция завершена!")
 
 
