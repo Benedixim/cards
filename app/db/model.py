@@ -79,11 +79,12 @@ class Data(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     product_id = Column(Integer, nullable=True)
-    characteristics = Column(Text, nullable=True)  # устарело
+    characteristics = Column(Text, nullable=True)  
     characteristic_id = Column(Integer, nullable=True)
     card_set = Column(String(255))
     payload = Column(JSON)  # сырые данные
     value = Column(Text, nullable=False, default="")  
+    pdf_urls = Column(Text, nullable=True, default=None)
 
 
 
@@ -233,7 +234,6 @@ def migrate_products():
             ("Сбер", "СберКарта", "https://www.sber-bank.by/loyalty-program"),
             ("Альфа Банк", "Альфа Бонус", "https://www.alfabank.by/alfabonus/"),
             ("Беларусбанк", "Шчодрыя баллы", "https://shchodraya.by/"),
-            ("МТБанк", "Манички", "https://manichki.mtbank.by/"),
             ("Приорбанк", "PriorPlus", "https://plus.priorbank.by/"),
             ("БНБ", "1-2-3", "https://bnb.by/bonus/"),
             ("ВТБ", "BonusBOX", "https://bonusbox.vtb.by/"),
@@ -538,6 +538,30 @@ def migrate_logs_add_tokens_column():
             
     except Exception as e:
         print(f"Ошибка миграции: {e}")
+        db.rollback()
+        return False
+    finally:
+        db.close()
+
+
+def migrate_data_add_pdf_urls():
+    """Добавляет столбец pdf_urls в таблицу data (если его нет)."""
+    db = SessionLocal()
+    try:
+        result = db.execute(text("PRAGMA table_info(data)"))
+        columns = [row[1] for row in result.fetchall()]
+
+        if "pdf_urls" not in columns:
+            print("Добавляю колонку pdf_urls в таблицу data...")
+            db.execute(text("ALTER TABLE data ADD COLUMN pdf_urls TEXT DEFAULT NULL"))
+            db.commit()
+            print("✅ Колонка pdf_urls добавлена!")
+            return True
+        else:
+            print("✅ Колонка pdf_urls уже существует")
+            return False
+    except Exception as e:
+        print(f"Ошибка миграции data: {e}")
         db.rollback()
         return False
     finally:

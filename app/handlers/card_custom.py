@@ -15,6 +15,7 @@ import os
 from gigachat import GigaChat
 import requests
 from bs4 import BeautifulSoup
+import fitz  # PyMuPDF
 from playwright.async_api import async_playwright
 
 from aiogram.fsm.context import FSMContext
@@ -27,7 +28,7 @@ from app.state import BankState
 from app.excel.py_xlsx import create_bank_excel_report
 from app.handlers.parser import get_page_content, extract_page_text
 from app.db.model import (SessionLocal, User, Log, Data, Bank, Set, Product, Characteristic,
-                           migrate_products, migrate_banks, init_db, get_sets_for_user, recreate_data_table, migrate_base_characteristics, migrate_logs_add_tokens_column, migrate_loyalty_characteristics)
+                           migrate_products, migrate_banks, init_db, get_sets_for_user, recreate_data_table, migrate_base_characteristics, migrate_logs_add_tokens_column, migrate_data_add_pdf_urls)
 from config import GIGACHAT_TOKEN, SYSTEM_USER_ID
 
 custom = Router()
@@ -43,7 +44,7 @@ def get_bot(token: str) -> Bot:
 
 
 FIELD_NAMES = {
-    "payment system": "Платежная система",
+    "type": "Тип карты",
     "currency": "Валюта", 
     "validity": "Срок действия",
     "maintenance_cost": "Обслуживание",
@@ -93,12 +94,11 @@ async def start_handler(message: Message, state: FSMContext):
 @custom.message(Command("actv"))
 async def start_multi(message: Message, state: FSMContext):
     # init_db()
-    migrate_banks()
+    # migrate_banks()
     migrate_products()
-    migrate_loyalty_characteristics()
     # migrate_base_characteristics()
     # recreate_data_table()
-    migrate_logs_add_tokens_column()
+    # migrate_logs_add_tokens_column()
     print("✅ Полная миграция завершена!")
 
 
@@ -137,7 +137,7 @@ async def dump_data_base(message: Message):
     try:
         shutil.copy2(src_path, tmp_path)
         document = FSInputFile(tmp_path, filename=f"cards_{timestamp}.db")
-        await message.answer_document(document, caption=f"🗄 База данных {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
+        await message.answer_document(document, caption=f"🗄 База данных\n🕐 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
     except Exception as e:
         await message.answer(f"Ошибка при отправке файла: {e}")
     finally:
@@ -1679,41 +1679,99 @@ async def parse_selected_data_with_response(
             print(f"\n Парсим {product.name} ({bank_name})...")
             
             try:
-                # Загружаем контент
-                page_content = await get_page_content(product.url)
-                
-                if not page_content or len(page_content) < 500:
-                    print(f"  !!! Не удалось загрузить страницу")
+                # Загружаем контент с таймаутом 90 секунд
+                TIMEOUT = 90
+                try:
+                    page_content = await asyncio.wait_for(
+                        get_page_content(product.url),
+                        timeout=TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    print(f"  ⏱️ Таймаут {TIMEOUT}с — {bank_name} не ответил, переходим дальше")
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=f"⏱️ {bank_name} | {product.name} — превышено время ожидания ({TIMEOUT}с), пропускаем"
+                    )
                     continue
+
+                if not page_content or len(page_content) < 500:
+                    print(f"  !!! requests не сработал, пробуем Playwright...")
+                    from app.handlers.parser import get_page_content as get_page_content_playwright
+                    try:
+                        page_content = await asyncio.wait_for(
+                            get_page_content_playwright(product.url),
+                            timeout=TIMEOUT
+                        )
+                    except asyncio.TimeoutError:
+                        print(f"  ⏱️ Playwright таймаут {TIMEOUT}с — пропускаем")
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=f"⏱️ {bank_name} | {product.name} — Playwright тоже не ответил ({TIMEOUT}с), пропускаем"
+                        )
+                        continue
+                    if not page_content or len(page_content) < 500:
+                        print(f"  !!! Не удалось загрузить страницу ни одним методом")
+                        continue
                 
                 print(f" Загружено {len(page_content)} символов")
                 
                 # Очищаем HTML
                 soup = BeautifulSoup(page_content, 'html.parser')
-                for tag in soup(['script', 'style', 'meta', 'link', 'svg', 'iframe', 'noscript']):
+                for tag in soup(['script', 'style', 'meta', 'link', 'svg', 'iframe',
+                                 'noscript', 'header', 'footer', 'nav']):
                     tag.decompose()
-                
                 cleaned_html = str(soup)
-                if len(cleaned_html) > 120000:
-                    cleaned_html = cleaned_html[:120000]
+                # Лимит увеличен — программы лояльности часто большие страницы
+                if len(cleaned_html) > 150000:
+                    cleaned_html = cleaned_html[:150000]
+
+                # Ищем и читаем PDF с этой страницы
+                try:
+                    result = await _collect_pdf_content(page_content, product.url)
+                    pdf_content, pdf_urls = result if result else ("", [])
+                except Exception as _pdf_err:
+                    print(f"  ⚠️ PDF сбор упал: {_pdf_err}")
+                    pdf_content, pdf_urls = "", []
+                if pdf_urls:
+                    print(f"  📄 PDF прочитано: {len(pdf_urls)} шт.: {pdf_urls}")
+
+                # Загружаем доп. страницы с условиями (about, rules, terms...)
+                extra_text = await _fetch_extra_pages(page_content, product.url)
+                if extra_text:
+                    print(f"  📑 Доп. страницы загружены: {len(extra_text)} символов")
                 
                 if len(cleaned_html) < 300:
                     print(f" -! HTML слишком мал, используем текстовый парсинг")
-                    text_content = soup.get_text(separator=" ", strip=True)[:70000]
-                    tokens_in, tokens_out = await _parse_product_text(giga, product, chars, db, user_id, text_content)
+                    # Дополняем текст PDF-контентом если есть
+                    raw_text = soup.get_text(separator="\n", strip=True)
+                    text_content = _dedup_text(raw_text)
+                    if extra_text:
+                        text_content = text_content + "\n\n---ДОППСТРАНИЦЫ---\n\n" + extra_text
+                    if pdf_content:
+                        text_content = text_content + "\n\n---PDF---\n\n" + pdf_content
+                    text_content = text_content[:80000]
+                    tokens_in, tokens_out = await _parse_product_text(giga, product, chars, db, user_id, text_content, pdf_urls)
                     log.tokens_input += tokens_in
                     log.tokens_output += tokens_out
                     continue
                 
 
-                tokens_in, tokens_out = await _parse_product_html(giga, product, chars, db, user_id, cleaned_html)
+                tokens_in, tokens_out = await _parse_product_html(giga, product, chars, db, user_id, cleaned_html, pdf_content, pdf_urls, extra_text)
                 log.tokens_input += tokens_in
                 log.tokens_output += tokens_out
                 
+                # tokens_in==0 означает либо ошибку, либо все поля null → пробуем текстовый парсинг
                 if tokens_in == 0 and tokens_out == 0:
-                    print(f"  >>> Пробуем текстовый парсинг...")
-                    text_content = soup.get_text(separator=" ", strip=True)[:70000]
-                    tokens_in, tokens_out = await _parse_product_text(giga, product, chars, db, user_id, text_content)
+                    print(f"  >>> HTML не дал результата, пробуем текстовый парсинг...")
+                    raw_text = soup.get_text(separator="\n", strip=True)
+                    text_content = _dedup_text(raw_text)
+                    print(f"  Текст: {len(raw_text)} → {len(text_content)} символов после дедупликации")
+                    if extra_text:
+                        text_content = text_content + "\n\n---ДОППСТРАНИЦЫ---\n\n" + extra_text
+                    if pdf_content:
+                        text_content = text_content + "\n\n---PDF---\n\n" + pdf_content
+                    text_content = text_content[:80000]
+                    tokens_in, tokens_out = await _parse_product_text(giga, product, chars, db, user_id, text_content, pdf_urls)
                     log.tokens_input += tokens_in
                     log.tokens_output += tokens_out
                 
@@ -1877,7 +1935,251 @@ async def add_product_to_current_set(callback: CallbackQuery, state: FSMContext)
     await callback.answer()
 
 
-async def _parse_product_html(giga: GigaChat, product, chars, db, user_id: int, cleaned_html: str) -> tuple[int, int]:
+
+# ─────────────────────────────────────────────
+# PDF helpers
+# ─────────────────────────────────────────────
+
+def _extract_pdf_links(html: str, base_url: str) -> list[str]:
+    """Ищет ссылки на PDF-файлы в HTML-странице (расширенный поиск)."""
+    from urllib.parse import urlparse, urljoin
+    soup = BeautifulSoup(html, 'html.parser')
+    links = set()
+    base = base_url.rstrip('/')
+
+    def _normalize(href: str) -> str | None:
+        href = href.strip().split('#')[0].split('?')[0]
+        if not href:
+            return None
+        if href.startswith('http'):
+            return href
+        if href.startswith('//'):
+            parsed = urlparse(base_url)
+            return f"{parsed.scheme}:{href}"
+        # Relative path
+        return urljoin(base_url, href)
+
+    PDF_MARKERS = ['.pdf', '/pdf/', 'pdf/', 'documents/', 'doc/', 'files/']
+
+    # 1. <a href>
+    for tag in soup.find_all('a', href=True):
+        href = tag['href']
+        if any(m in href.lower() for m in PDF_MARKERS):
+            url = _normalize(href)
+            if url:
+                links.add(url)
+
+    # 2. data-* attributes (data-href, data-url, data-src)
+    for tag in soup.find_all(True):
+        for attr in ('data-href', 'data-url', 'data-src', 'data-file'):
+            val = tag.get(attr, '')
+            if val and any(m in val.lower() for m in PDF_MARKERS):
+                url = _normalize(val)
+                if url:
+                    links.add(url)
+
+    # 3. Ищем PDF-ссылки прямо в тексте (встречается в JS-блоках)
+    import re
+    for match in re.finditer(r'(?<=["\'])(\S+?\.pdf)(?=["\'])', html, re.IGNORECASE):
+        url = _normalize(match.group(1))
+        if url:
+            links.add(url)
+
+    print(f"  _extract_pdf_links: найдено {len(links)} PDF")
+    return list(links)
+
+
+def _download_pdf(url: str, save_dir: str = "./tmp_pdfs") -> str | None:
+    """Скачивает PDF по URL, возвращает путь к временному файлу."""
+    os.makedirs(save_dir, exist_ok=True)
+    try:
+        r = requests.get(url, timeout=15, verify=False,
+                         headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            return None
+        filename = os.path.join(save_dir, os.path.basename(url.split('?')[0]) or "doc.pdf")
+        with open(filename, 'wb') as f:
+            f.write(r.content)
+        return filename
+    except Exception as e:
+        print(f"  PDF download error: {e}")
+        return None
+
+
+async def _extract_pdf_text(pdf_path: str, max_chars: int = 80000) -> str:
+    """Извлекает текст из PDF через PyMuPDF (fitz)."""
+    try:
+        doc = fitz.open(pdf_path)
+        text = ""
+        for page in doc:
+            text += page.get_text()
+        doc.close()
+        return text.strip()[:max_chars]
+    except Exception as e:
+        print(f"  Ошибка чтения PDF {pdf_path}: {e}")
+        return ""
+
+
+# PDF-файлы которые точно не содержат нужных данных — фильтруем
+_PDF_SKIP_KEYWORDS = [
+    'polozheniye', 'politika', 'policy', 'privacy', 'personal',
+    'obrabotka', 'персональн', 'soglasie', 'согласие', 'agreement',
+    'cookie', 'licence', 'license', 'оферта', 'rekvizit', 'устав',
+    'charter', 'reestr', 'реестр', 'lichenzia', 'лицензи', 'polit-',
+    'reklam', 'реклам', 'oferta', 'anketa', 'zayavl',
+]
+
+def _is_relevant_pdf(url: str) -> bool:
+    """Возвращает False если PDF явно нерелевантен (политики, соглашения и т.д.)."""
+    name = url.lower().split('/')[-1].split('?')[0]
+    return not any(kw in name for kw in _PDF_SKIP_KEYWORDS)
+
+
+async def _collect_pdf_content(page_html: str, product_url: str,
+                                max_pdfs: int = 5) -> tuple[str, list[str]]:
+    """
+    Ищет PDF-ссылки на странице, скачивает и читает каждый файл.
+    Фильтрует нерелевантные PDF (политики, соглашения).
+    Возвращает (объединённый текст, список URL найденных PDF).
+    Всегда возвращает tuple — никогда не бросает исключение.
+    """
+    try:
+        all_links = _extract_pdf_links(page_html, product_url)
+
+        # Фильтруем мусорные PDF
+        pdf_links = [u for u in all_links if _is_relevant_pdf(u)]
+        skipped = len(all_links) - len(pdf_links)
+        print(f"  PDF найдено: {len(all_links)}, после фильтра: {len(pdf_links)} (пропущено: {skipped})")
+
+        pdf_texts = []
+        pdf_urls_used = []
+
+        for pdf_url in pdf_links[:max_pdfs]:
+            try:
+                pdf_file = _download_pdf(pdf_url)
+                if not pdf_file:
+                    continue
+                text = await _extract_pdf_text(pdf_file)
+                try:
+                    os.remove(pdf_file)
+                except:
+                    pass
+                if text:
+                    pdf_urls_used.append(pdf_url)
+                    pdf_texts.append(f"PDF ({os.path.basename(pdf_url.split('?')[0])}):\n{text}")
+                    print(f"  ✅ PDF прочитан: {os.path.basename(pdf_url)} ({len(text)} символов)")
+                else:
+                    print(f"  ⚠️ PDF пустой: {os.path.basename(pdf_url)}")
+            except Exception as e:
+                print(f"  ⚠️ Ошибка PDF {pdf_url}: {e}")
+                continue
+
+        combined = "\n\n---\n\n".join(pdf_texts)
+        return combined, pdf_urls_used
+
+    except Exception as e:
+        print(f"  !!! _collect_pdf_content критическая ошибка: {e}")
+        return "", []
+
+
+
+
+# Ключевые слова для поиска страниц с условиями программы
+_CONDITIONS_KEYWORDS = [
+    'about', 'conditions', 'rules', 'terms', 'program', 'loyalty',
+    'о-программе', 'о_программе', 'usloviya', 'pravila', 'tarify',
+    'условия', 'правила', 'тарифы', 'программа', 'участие',
+    'nacislenie', 'начисление', 'bonusy', 'бонусы', 'info',
+]
+
+def _find_conditions_links(html: str, base_url: str, max_links: int = 3) -> list[str]:
+    """Ищет ссылки на страницы с условиями программы лояльности."""
+    from urllib.parse import urlparse, urljoin
+    soup = BeautifulSoup(html, 'html.parser')
+    base_domain = urlparse(base_url).netloc
+    found = []
+    seen = {base_url.rstrip('/')}
+
+    for a in soup.find_all('a', href=True):
+        href = a['href'].strip()
+        text = a.get_text(strip=True).lower()
+
+        # Проверяем текст ссылки и href на ключевые слова
+        combined = (href + ' ' + text).lower()
+        if not any(kw in combined for kw in _CONDITIONS_KEYWORDS):
+            continue
+
+        # Нормализуем URL
+        if href.startswith('http'):
+            full_url = href
+        elif href.startswith('/'):
+            parsed = urlparse(base_url)
+            full_url = f"{parsed.scheme}://{parsed.netloc}{href}"
+        else:
+            full_url = urljoin(base_url, href)
+
+        # Только ссылки в пределах того же домена
+        if urlparse(full_url).netloc != base_domain:
+            continue
+
+        clean = full_url.split('#')[0].rstrip('/')
+        if clean not in seen:
+            seen.add(clean)
+            found.append(clean)
+
+        if len(found) >= max_links:
+            break
+
+    print(f"  Найдено доп. страниц с условиями: {len(found)}: {found}")
+    return found
+
+
+async def _fetch_extra_pages(page_html: str, product_url: str) -> str:
+    """
+    Загружает дополнительные страницы с условиями программы и
+    возвращает их объединённый очищенный текст.
+    """
+    extra_links = _find_conditions_links(page_html, product_url)
+    if not extra_links:
+        return ""
+
+    extra_texts = []
+    for url in extra_links:
+        try:
+            content = await asyncio.wait_for(get_page_content(url), timeout=30)
+            if not content or len(content) < 300:
+                continue
+            soup = BeautifulSoup(content, 'html.parser')
+            for tag in soup(['script', 'style', 'meta', 'link', 'svg',
+                             'iframe', 'noscript', 'header', 'footer', 'nav']):
+                tag.decompose()
+            text = _dedup_text(soup.get_text(separator="\n", strip=True))[:30000]
+            if text:
+                extra_texts.append(f"--- Страница {url} ---\n{text}")
+                print(f"  ✅ Доп. страница загружена: {url} ({len(text)} символов)")
+        except asyncio.TimeoutError:
+            print(f"  ⚠️ Таймаут доп. страницы: {url}")
+        except Exception as e:
+            print(f"  ⚠️ Ошибка доп. страницы {url}: {e}")
+
+    return "\n\n".join(extra_texts)
+
+def _dedup_text(text: str, min_len: int = 40) -> str:
+    """Убирает дублированные строки (артефакт slick-слайдеров и клонированных блоков)."""
+    seen = set()
+    result = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if len(stripped) < min_len:
+            # Короткие строки пропускаем дедупликацию
+            result.append(line)
+            continue
+        if stripped not in seen:
+            seen.add(stripped)
+            result.append(line)
+    return "\n".join(result)
+
+async def _parse_product_html(giga: GigaChat, product, chars, db, user_id: int, cleaned_html: str, pdf_content: str = "", pdf_urls: list = None, extra_text: str = "") -> tuple[int, int]:
 
     char_instructions = []
     for char in chars:
@@ -1885,22 +2187,37 @@ async def _parse_product_html(giga: GigaChat, product, chars, db, user_id: int, 
             f"- {char.name}: {char.description or 'найти значение'}"
         )
     
-    prompt = f"""Извлеки данные из HTML для "{product.name}". ВСЕ поля ищи везде.
+    pdf_section = f"""
 
-ИНСТРУКЦИИ:
-1. Ищи в <table>, <tr>, <td>, <ul>, <li>, <div>, <span>, <p>
-2. Комбинируй информацию если она разделена на части
-3. Если значение не найдено - напиши null
-4. Ответ - ТОЛЬКО JSON в одну строку
+ТЕКСТ ИЗ PDF:
+ВАЖНО: если значения отсутствуют или неполные в HTML — ОБЯЗАТЕЛЬНО используй данные из PDF.
 
-ПОЛЯ:
+{pdf_content}""" if pdf_content else ""
+
+    extra_section = f"""
+
+ДОПОЛНИТЕЛЬНЫЕ СТРАНИЦЫ САЙТА (условия, правила, о программе):
+{extra_text}""" if extra_text else ""
+
+    fields_json = "{" + ", ".join(f'"{c.name}": null' for c in chars) + "}"
+
+    prompt = f"""Ты парсер банковских данных. Извлеки КОНКРЕТНЫЕ значения для продукта "{product.name}" банка.
+
+ПОЛЯ И ЧТО ИСКАТЬ:
 {chr(10).join(char_instructions)}
 
-Формат ответа JSON:
-{{{chr(34)}{chars[0].name}{chr(34)}:...}}
+ПРАВИЛА:
+1. Ищи данные в <table>, <tr>, <td>, <ul>, <li>, <div class*="condition">, <span>, <p>, секциях "Условия", "Тарифы", "Как это работает"
+2. Если данные разбиты на части — собери в одну строку
+3. Конкретные цифры важнее общих фраз (пиши "до 10%" а не "повышенный кэшбэк")
+4. Если поле реально не найдено — пиши null (не придумывай)
+5. Ответ — СТРОГО только JSON, без пояснений и markdown
 
-HTML:
-{cleaned_html}"""
+Шаблон ответа (замени null на найденные значения):
+{fields_json}
+
+HTML СТРАНИЦЫ:
+{cleaned_html}{pdf_section}{extra_section}"""
 
     try:
         result = giga.chat(prompt)
@@ -1920,8 +2237,9 @@ HTML:
         
         has_data = any(v for v in parsed_data.values() if v and v != "null" and v is not None)
         if not has_data:
-            print(f"  -! Все поля null")
-            return tokens_input, tokens_output
+            print(f"  -! HTML парсинг: все поля null, передаём в текстовый fallback")
+            # Возвращаем (0, 0) чтобы основной цикл запустил текстовый парсинг
+            return 0, 0
         
         # Сохраняем в БД
         for char in chars:
@@ -1934,7 +2252,8 @@ HTML:
                 product_id=product.id,
                 characteristic_id=char.id,
                 card_set="Автопарсинг",
-                value=str(value)
+                value=str(value),
+                pdf_urls="\n".join(pdf_urls) if pdf_urls else None
             )
             db.add(data_record)
         
@@ -1946,7 +2265,7 @@ HTML:
         return 0, 0
 
 
-async def _parse_product_text(giga: GigaChat, product, chars, db, user_id: int, text_content: str) -> tuple[int, int]:
+async def _parse_product_text(giga: GigaChat, product, chars, db, user_id: int, text_content: str, pdf_urls: list = None) -> tuple[int, int]:
     
     char_instructions = []
     for char in chars:
@@ -1954,14 +2273,21 @@ async def _parse_product_text(giga: GigaChat, product, chars, db, user_id: int, 
             f"- {char.name}: {char.description or 'найти значение'}"
         )
     
-    prompt = f"""Извлеки данные для "{product.name}" из текста. Найди ВСЕ значения.
+    fields_json = "{" + ", ".join(f'"{c.name}": null' for c in chars) + "}"
 
-ПОЛЯ:
+    prompt = f"""Ты парсер банковских данных. Извлеки КОНКРЕТНЫЕ значения для "{product.name}" из текста страницы.
+
+ПОЛЯ И ЧТО ИСКАТЬ:
 {chr(10).join(char_instructions)}
 
-Если значение не найдено - напиши null.
-Ответ - ТОЛЬКО JSON одной строкой:
-{{{chr(34)}{chars[0].name}{chr(34)}:...}}
+ПРАВИЛА:
+1. Ищи секции "Условия", "Тарифы", "Как начислить", "Как потратить", таблицы с процентами
+2. Конкретные цифры важнее общих фраз
+3. Если поле реально не найдено — пиши null
+4. Ответ — СТРОГО только JSON без пояснений
+
+Шаблон ответа:
+{fields_json}
 
 ТЕКСТ:
 {text_content}"""
@@ -1985,26 +2311,29 @@ async def _parse_product_text(giga: GigaChat, product, chars, db, user_id: int, 
         
         has_data = any(v for v in parsed_data.values() if v and v != "null" and v is not None)
         if not has_data:
-            print(f"  -! Все поля null")
-            return tokens_input, tokens_output
+            print(f"  -! Текстовый парсинг: все поля null — сохраняем как 'Не найдено'")
         
-        # Сохраняем в БД
+        # Сохраняем в БД всегда — даже null, чтобы строка в Excel не была пустой
         for char in chars:
-            value = parsed_data.get(char.name) or "Не указано"
-            if value == "null":
-                value = "Не указано"
+            raw = parsed_data.get(char.name)
+            if not raw or raw == "null":
+                value = "Не найдено"
+            else:
+                value = str(raw)
             
             data_record = Data(
                 user_id=user_id,
                 product_id=product.id,
                 characteristic_id=char.id,
                 card_set="Автопарсинг",
-                value=str(value)
+                value=value,
+                pdf_urls="\n".join(pdf_urls) if pdf_urls else None
             )
             db.add(data_record)
         
-        print(f"  ✅ Сохранено {len(chars)} характеристик (текстовый парсинг)")
-        return prompt_tokens, completion_tokens
+        if has_data:
+            print(f"  ✅ Сохранено {len(chars)} характеристик (текстовый парсинг)")
+        return tokens_input, tokens_output
         
     except Exception as e:
         print(f"  !!! Ошибка: {e}")
