@@ -23,7 +23,6 @@ etelemetry==0.3.1
 filelock==3.20.3
 Flask==3.1.2
 frozenlist==1.8.0
-fitz
 gigachat==0.1.43
 greenlet==3.3.1
 h11==0.16.0
@@ -49,6 +48,7 @@ pathlib==1.0.1
 playwright==1.57.0
 propcache==0.4.1
 prov==2.1.1
+PyMuPDF==1.26.7
 puremagic==1.30
 pydantic==2.12.5
 pydantic_core==2.41.5

@@ -15,7 +15,7 @@ import os
 from gigachat import GigaChat
 import requests
 from bs4 import BeautifulSoup
-import fitz  # PyMuPDF
+import fitz
 from playwright.async_api import async_playwright
 
 from aiogram.fsm.context import FSMContext
