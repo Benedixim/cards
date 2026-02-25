@@ -17,6 +17,7 @@ dotenv==0.9.9
 et_xmlfile==2.0.0
 Flask==3.1.2
 frozenlist==1.8.0
+fitz
 gigachat==0.1.43
 greenlet==3.3.1
 h11==0.16.0
