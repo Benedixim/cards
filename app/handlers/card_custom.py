@@ -15,7 +15,7 @@ import os
 from gigachat import GigaChat
 import requests
 from bs4 import BeautifulSoup
-import fitz
+import fitz  # PyMuPDF
 from playwright.async_api import async_playwright
 
 from aiogram.fsm.context import FSMContext
@@ -601,7 +601,25 @@ async def create_set_process(message: Message, state: FSMContext):
         await message.answer("Название не должно быть пустым. Введите название набора:")
         return
 
-    user_id = message.from_user.id
+    # Сохраняем имя в state и спрашиваем тип набора
+    await state.update_data(pending_set_name=name)
+    await message.answer(
+        f"📁 Набор: *{name}*\n\nВыберите тип набора:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎯 Программа лояльности", callback_data="set_type_loyalty")],
+            [InlineKeyboardButton(text="💳 Обычный набор (карты, вклады...)", callback_data="set_type_regular")],
+        ])
+    )
+
+
+@custom.callback_query(F.data.in_({"set_type_loyalty", "set_type_regular"}))
+async def create_set_with_type(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    name = data.get("pending_set_name", "Новый набор")
+    is_loyalty = 1 if callback.data == "set_type_loyalty" else 0
+
+    user_id = callback.from_user.id
     db = SessionLocal()
 
     try:
@@ -613,20 +631,22 @@ async def create_set_process(message: Message, state: FSMContext):
 
         existing = db.query(Set).filter_by(name=name, user_id=user.id).first()
         if existing:
-            await message.answer(f"Набор с таким именем уже есть: {name}")
+            await callback.message.edit_text(f"Набор с таким именем уже есть: {name}")
             await state.clear()
             return
 
         new_set = Set(
             name=name,
             user_id=user.id,
-            description="Пользовательский набор"
+            description="Пользовательский набор",
+            is_loyalty=is_loyalty
         )
         db.add(new_set)
         db.commit()
         db.refresh(new_set)
 
-        await message.answer(f"✅ Набор '{name}' создан!")
+        type_label = "🎯 Программа лояльности" if is_loyalty else "💳 Обычный набор"
+        await callback.message.edit_text(f"✅ Набор '{name}' создан!\n{type_label}")
 
         set_id = new_set.id
         await state.update_data(current_set_id=set_id)
@@ -651,11 +671,10 @@ async def create_set_process(message: Message, state: FSMContext):
             ]
         )
 
-        await message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
+        await callback.message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
 
     finally:
         db.close()
-
 
 
 async def build_products_keyboard(state: FSMContext, set_id: int):
@@ -1600,12 +1619,14 @@ async def start_parsing(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("🔄 **Начинаем парсинг...**\n\nЭто может занять несколько минут.", parse_mode="Markdown")
     await callback.answer()
     
+    set_id = data.get("selected_set_id")
     asyncio.create_task(parse_selected_data_with_response(
         callback.from_user.id, 
         selected_products, 
         selected_chars,
         callback.message.chat.id,
-        callback.bot
+        callback.bot,
+        set_id=set_id
     ))
 
 async def parse_selected_data_with_response(
@@ -1613,7 +1634,8 @@ async def parse_selected_data_with_response(
     product_ids: list[int], 
     char_ids: list[int],
     chat_id: int,
-    bot: Bot
+    bot: Bot,
+    set_id: int = None
 ):
 
     db = SessionLocal()
@@ -1639,6 +1661,10 @@ async def parse_selected_data_with_response(
         banks = db.query(Bank).all()
         
         bank_map = {b.id: b for b in banks}
+
+        # Режим программы лояльности только для набора с id=7
+        is_loyalty = (set_id == 7)
+        print(f"  {'🎯 Программа лояльности' if is_loyalty else '📋 Обычный набор'} (set_id={set_id})")
         
         giga = GigaChat(
             credentials=GIGACHAT_TOKEN,
@@ -1725,20 +1751,19 @@ async def parse_selected_data_with_response(
                 if len(cleaned_html) > 150000:
                     cleaned_html = cleaned_html[:150000]
 
-                # Ищем и читаем PDF с этой страницы
-                try:
-                    result = await _collect_pdf_content(page_content, product.url)
-                    pdf_content, pdf_urls = result if result else ("", [])
-                except Exception as _pdf_err:
-                    print(f"  ⚠️ PDF сбор упал: {_pdf_err}")
-                    pdf_content, pdf_urls = "", []
-                if pdf_urls:
-                    print(f"  📄 PDF прочитано: {len(pdf_urls)} шт.: {pdf_urls}")
-
-                # Загружаем доп. страницы с условиями (about, rules, terms...)
-                extra_text = await _fetch_extra_pages(page_content, product.url)
-                if extra_text:
-                    print(f"  📑 Доп. страницы загружены: {len(extra_text)} символов")
+                # PDF и доп. страницы — только для программ лояльности
+                pdf_content, pdf_urls, extra_text = "", [], ""
+                if is_loyalty:
+                    try:
+                        result = await _collect_pdf_content(page_content, product.url)
+                        pdf_content, pdf_urls = result if result else ("", [])
+                    except Exception as _pdf_err:
+                        print(f"  ⚠️ PDF сбор упал: {_pdf_err}")
+                    if pdf_urls:
+                        print(f"  📄 PDF прочитано: {len(pdf_urls)} шт.: {pdf_urls}")
+                    extra_text = await _fetch_extra_pages(page_content, product.url)
+                    if extra_text:
+                        print(f"  📑 Доп. страницы загружены: {len(extra_text)} символов")
                 
                 if len(cleaned_html) < 300:
                     print(f" -! HTML слишком мал, используем текстовый парсинг")
